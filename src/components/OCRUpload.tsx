@@ -1,12 +1,19 @@
 import { useState, useCallback } from "react";
-import { Upload, Loader2, Copy, CheckCircle2, Camera, Download } from "lucide-react";
+import { Upload, Loader2, Copy, CheckCircle2, Camera, Download, MessageSquare, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import Tesseract from "tesseract.js";
 import { ImagePreprocessor } from "./ImagePreprocessor";
 import { CameraCapture } from "./CameraCapture";
 import { jsPDF } from "jspdf";
+
+interface QAPair {
+  question: string;
+  answer: string;
+  timestamp: number;
+}
 
 export const OCRUpload = () => {
   const [image, setImage] = useState<string | null>(null);
@@ -17,6 +24,9 @@ export const OCRUpload = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [showPreprocessor, setShowPreprocessor] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [qaHistory, setQaHistory] = useState<QAPair[]>([]);
+  const [isAnswering, setIsAnswering] = useState(false);
   const { toast } = useToast();
 
   const processOCR = useCallback(
@@ -213,6 +223,66 @@ export const OCRUpload = () => {
     setExtractedText("");
     setShowPreprocessor(false);
     setShowCamera(false);
+    setQuestion("");
+    setQaHistory([]);
+  };
+
+  const handleAskQuestion = async () => {
+    if (!question.trim() || !extractedText) {
+      toast({
+        title: "Cannot ask question",
+        description: "Please enter a question and ensure text is extracted",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsAnswering(true);
+
+    // 🤖 RAG INTEGRATION POINT: Question Answering
+    // This is where you'll integrate RAG (Retrieval Augmented Generation):
+    // 1. Embed the question using an embedding model
+    // 2. Search for relevant chunks from the extracted text (vector search)
+    // 3. Send question + relevant context to LLM
+    // 4. Return the answer
+    //
+    // Example implementation:
+    // const answer = await supabase.functions.invoke('rag-answer', {
+    //   body: { 
+    //     question: question,
+    //     context: extractedText,
+    //     conversationHistory: qaHistory
+    //   }
+    // });
+
+    try {
+      // Placeholder response - replace with RAG implementation
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      const mockAnswer = `This is a placeholder answer. When RAG is implemented, this will analyze the extracted text and provide an intelligent answer to: "${question}"`;
+
+      const newQA: QAPair = {
+        question: question,
+        answer: mockAnswer,
+        timestamp: Date.now(),
+      };
+
+      setQaHistory(prev => [...prev, newQA]);
+      setQuestion("");
+      
+      toast({
+        title: "Answer generated",
+        description: "RAG implementation coming soon!",
+      });
+    } catch (error) {
+      console.error("Question answering error:", error);
+      toast({
+        title: "Failed to answer question",
+        description: "An error occurred while processing your question",
+        variant: "destructive",
+      });
+    } finally {
+      setIsAnswering(false);
+    }
   };
 
   return (
@@ -351,21 +421,74 @@ export const OCRUpload = () => {
                 </pre>
               </div>
               
+              {/* Q&A Section - RAG Ready */}
+              <div className="mt-6 space-y-4">
+                <div className="flex items-center gap-2 text-foreground">
+                  <MessageSquare className="w-5 h-5 text-primary" />
+                  <h4 className="font-semibold">Ask Questions About This Text</h4>
+                </div>
+
+                {/* Q&A History */}
+                {qaHistory.length > 0 && (
+                  <div className="space-y-3 max-h-60 overflow-y-auto p-3 bg-muted/20 rounded-lg">
+                    {qaHistory.map((qa, index) => (
+                      <div key={qa.timestamp} className="space-y-2">
+                        <div className="flex items-start gap-2">
+                          <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <MessageSquare className="w-3 h-3 text-primary" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-foreground">{qa.question}</p>
+                            <p className="text-sm text-muted-foreground mt-1">{qa.answer}</p>
+                          </div>
+                        </div>
+                        {index < qaHistory.length - 1 && (
+                          <div className="border-t border-border/50" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Question Input */}
+                <div className="flex gap-2">
+                  <Textarea
+                    value={question}
+                    onChange={(e) => setQuestion(e.target.value)}
+                    placeholder="Ask a question about the extracted text..."
+                    className="min-h-[80px] resize-none"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAskQuestion();
+                      }
+                    }}
+                    disabled={isAnswering}
+                  />
+                  <Button
+                    onClick={handleAskQuestion}
+                    disabled={isAnswering || !question.trim()}
+                    className="self-end"
+                  >
+                    {isAnswering ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  💡 RAG integration coming soon - questions will be answered using AI based on the extracted text
+                </p>
+              </div>
+
               {/* 🤖 AI ENHANCEMENT POINT #2: Generate Lessons & Study Materials
-                  Add AI-powered features here:
+                  Additional AI-powered features to add:
                   - Button: "Generate Lesson" - creates structured lessons from text
                   - Button: "Create Flashcards" - extracts key concepts
                   - Button: "Summarize" - creates condensed version
                   - Button: "Quiz Me" - generates questions from content
-                  - Button: "Explain Concepts" - AI breaks down complex topics
-                  
-                  Example implementation:
-                  <Button onClick={() => generateLesson(extractedText)}>
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Generate Lesson
-                  </Button>
-                  
-                  Display AI results in a new Card below or in a dialog/sheet
               */}
               
               <div className="mt-4 flex gap-3">
