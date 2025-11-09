@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { Upload, Loader2, Copy, CheckCircle2, Camera, Download, MessageSquare, Send } from "lucide-react";
+import { Upload, Loader2, Copy, CheckCircle2, Camera, Download, MessageSquare, Send, BookOpen, Brain, FileText, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,9 +8,7 @@ import Tesseract from "tesseract.js";
 import { ImagePreprocessor } from "./ImagePreprocessor";
 import { CameraCapture } from "./CameraCapture";
 import { jsPDF } from "jspdf";
-
-// 1. ADD THE GEMINI SDK IMPORT
-import { GoogleGenAI } from "@google/genai";
+import { supabase } from "@/integrations/supabase/client";
 
 interface QAPair {
   question: string;
@@ -18,14 +16,9 @@ interface QAPair {
   timestamp: number;
 }
 
+type StudyFeature = 'lesson' | 'flashcards' | 'summarize' | 'quiz' | null;
+
 export const OCRUpload = () => {
-  // 2. INITIALIZE THE GEMINI CLIENT
-  // 🚨 SECURITY WARNING: Storing the API key directly in front-end code is unsafe.
-  // For production, always use a secure backend proxy or environment variables like 
-  // process.env.REACT_APP_GEMINI_API_KEY.
-  const GEMINI_API_KEY = "haha api key";
-  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-  
   const [image, setImage] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -37,33 +30,30 @@ export const OCRUpload = () => {
   const [question, setQuestion] = useState("");
   const [qaHistory, setQaHistory] = useState<QAPair[]>([]);
   const [isAnswering, setIsAnswering] = useState(false);
+  const [activeFeature, setActiveFeature] = useState<StudyFeature>(null);
+  const [studyResult, setStudyResult] = useState<string>("");
+  const [isGenerating, setIsGenerating] = useState(false);
   const { toast } = useToast();
 
-  // 3. CREATE THE Q&A CORE LOGIC
-  const answerQuestion = useCallback(async (context: string, userQuestion: string): Promise<string> => {
-    // The system instruction forces the model to act as a Q&A expert 
-    // and only use the provided text (context) for its answer.
-    const systemInstruction = `You are an expert Q&A assistant. Your sole purpose is to answer the user's question ONLY using the text provided below. If the answer is not in the text, state clearly and politely that the information cannot be found in the provided document.
-
---- PROVIDED DOCUMENT TEXT ---
-${context}
---- END OF DOCUMENT TEXT ---
-`;
-
+  const callAIStudyTool = useCallback(async (
+    text: string,
+    action: 'qa' | 'lesson' | 'flashcards' | 'summarize' | 'quiz',
+    question?: string
+  ): Promise<string> => {
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash", // Fast and capable model
-        contents: userQuestion,
-        config: {
-          systemInstruction: systemInstruction,
-        },
+      const { data, error } = await supabase.functions.invoke('ai-study-tools', {
+        body: { text, action, question }
       });
-      return response.text;
+
+      if (error) throw error;
+      if (!data?.result) throw new Error('No response from AI');
+
+      return data.result;
     } catch (error) {
-      console.error("Gemini API Error:", error);
-      throw new Error("Failed to get response from AI model.");
+      console.error('AI Study Tool Error:', error);
+      throw new Error('Failed to process with AI');
     }
-  }, [ai]);
+  }, []);
 
   const processOCR = useCallback(
     async (imageDataUrl: string) => {
@@ -261,9 +251,10 @@ ${context}
     setShowCamera(false);
     setQuestion("");
     setQaHistory([]);
+    setActiveFeature(null);
+    setStudyResult("");
   };
 
-  // 4. IMPLEMENT THE GEMINI API CALL HERE
   const handleAskQuestion = async () => {
     if (!question.trim() || !extractedText) {
       toast({
@@ -276,11 +267,10 @@ ${context}
 
     setIsAnswering(true);
 
-    // 1. Prepare and add the question to history as a pending item
     const userQuestion = question.trim();
     const newQAPair: QAPair = {
       question: userQuestion,
-      answer: "...", // Placeholder for loading state
+      answer: "...",
       timestamp: Date.now(),
     };
 
@@ -288,13 +278,10 @@ ${context}
     setQuestion("");
 
     try {
-      // 2. Call the new RAG-style AI function
-      const aiAnswer = await answerQuestion(extractedText, userQuestion);
+      const aiAnswer = await callAIStudyTool(extractedText, 'qa', userQuestion);
 
-      // 3. Update the history with the actual answer
       setQaHistory(prev => {
         const updatedHistory = [...prev];
-        // Find the temporary entry by timestamp and update its answer
         const indexToUpdate = updatedHistory.findIndex(qa => qa.timestamp === newQAPair.timestamp);
         if (indexToUpdate !== -1) {
           updatedHistory[indexToUpdate].answer = aiAnswer;
@@ -303,21 +290,55 @@ ${context}
       });
       
       toast({
-        title: "Answer generated successfully!",
-        description: "The AI has analyzed the extracted text.",
+        title: "Answer generated!",
+        description: "Question answered based on extracted text",
       });
 
     } catch (error: any) {
       console.error("Question answering error:", error);
-      // Remove the temporary entry on failure
       setQaHistory((prev) => prev.filter(q => q.timestamp !== newQAPair.timestamp));
       toast({
         title: "Failed to answer question",
-        description: `An error occurred while processing your question: ${error.message}`,
+        description: error.message || "An error occurred",
         variant: "destructive",
       });
     } finally {
       setIsAnswering(false);
+    }
+  };
+
+  const handleStudyFeature = async (feature: 'lesson' | 'flashcards' | 'summarize' | 'quiz') => {
+    if (!extractedText) {
+      toast({
+        title: "No text available",
+        description: "Please extract text first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGenerating(true);
+    setActiveFeature(feature);
+    setStudyResult("");
+
+    try {
+      const result = await callAIStudyTool(extractedText, feature);
+      setStudyResult(result);
+      
+      toast({
+        title: "Generated successfully!",
+        description: `Your ${feature} is ready`,
+      });
+    } catch (error: any) {
+      console.error(`${feature} generation error:`, error);
+      setActiveFeature(null);
+      toast({
+        title: "Generation failed",
+        description: error.message || "An error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -475,13 +496,7 @@ ${context}
                           </div>
                           <div className="flex-1">
                             <p className="text-sm font-medium text-foreground">{qa.question}</p>
-                            <p className="text-sm text-muted-foreground mt-1">
-                              {qa.answer === "..." ? (
-                                <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
-                              ) : (
-                                qa.answer
-                              )}
-                            </p>
+                            <p className="text-sm text-muted-foreground mt-1">{qa.answer}</p>
                           </div>
                         </div>
                         {index < qaHistory.length - 1 && (
@@ -521,17 +536,92 @@ ${context}
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  ✅ Q&A is now powered by the Gemini API. Questions will be answered based on the extracted text.
+                  ✨ Powered by AI - Ask questions about the extracted text
                 </p>
               </div>
 
-              {/* 🤖 AI ENHANCEMENT POINT #2: Generate Lessons & Study Materials
-                  Additional AI-powered features to add:
-                  - Button: "Generate Lesson" - creates structured lessons from text
-                  - Button: "Create Flashcards" - extracts key concepts
-                  - Button: "Summarize" - creates condensed version
-                  - Button: "Quiz Me" - generates questions from content
-              */}
+              {/* AI Study Tools */}
+              <div className="mt-6 space-y-4">
+                <div className="flex items-center gap-2 text-foreground">
+                  <Brain className="w-5 h-5 text-primary" />
+                  <h4 className="font-semibold">AI Study Tools</h4>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    onClick={() => handleStudyFeature('lesson')}
+                    disabled={isGenerating}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    Generate Lesson
+                  </Button>
+                  <Button
+                    onClick={() => handleStudyFeature('flashcards')}
+                    disabled={isGenerating}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <Brain className="w-4 h-4" />
+                    Create Flashcards
+                  </Button>
+                  <Button
+                    onClick={() => handleStudyFeature('summarize')}
+                    disabled={isGenerating}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <FileText className="w-4 h-4" />
+                    Summarize
+                  </Button>
+                  <Button
+                    onClick={() => handleStudyFeature('quiz')}
+                    disabled={isGenerating}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    <HelpCircle className="w-4 h-4" />
+                    Quiz Me
+                  </Button>
+                </div>
+
+                {/* Study Result Display */}
+                {activeFeature && (
+                  <div className="p-4 bg-muted/30 rounded-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h5 className="font-semibold text-foreground capitalize">
+                        {activeFeature === 'flashcards' ? 'Flashcards' : activeFeature}
+                      </h5>
+                      {!isGenerating && (
+                        <Button
+                          onClick={() => {
+                            setActiveFeature(null);
+                            setStudyResult("");
+                          }}
+                          variant="ghost"
+                          size="sm"
+                        >
+                          Close
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {isGenerating ? (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <p className="text-sm">Generating...</p>
+                      </div>
+                    ) : studyResult ? (
+                      <div className="max-h-96 overflow-y-auto">
+                        <pre className="whitespace-pre-wrap text-sm text-foreground">
+                          {studyResult}
+                        </pre>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
               
               <div className="mt-4 flex gap-3">
                 <Button onClick={resetUpload} variant="outline" className="flex-1">
