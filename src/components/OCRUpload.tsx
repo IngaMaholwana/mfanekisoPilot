@@ -9,6 +9,9 @@ import { ImagePreprocessor } from "./ImagePreprocessor";
 import { CameraCapture } from "./CameraCapture";
 import { jsPDF } from "jspdf";
 
+// 1. ADD THE GEMINI SDK IMPORT
+import { GoogleGenAI } from "@google/genai";
+
 interface QAPair {
   question: string;
   answer: string;
@@ -16,6 +19,13 @@ interface QAPair {
 }
 
 export const OCRUpload = () => {
+  // 2. INITIALIZE THE GEMINI CLIENT
+  // 🚨 SECURITY WARNING: Storing the API key directly in front-end code is unsafe.
+  // For production, always use a secure backend proxy or environment variables like 
+  // process.env.REACT_APP_GEMINI_API_KEY.
+  const GEMINI_API_KEY = "haha api key";
+  const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  
   const [image, setImage] = useState<string | null>(null);
   const [extractedText, setExtractedText] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -28,6 +38,32 @@ export const OCRUpload = () => {
   const [qaHistory, setQaHistory] = useState<QAPair[]>([]);
   const [isAnswering, setIsAnswering] = useState(false);
   const { toast } = useToast();
+
+  // 3. CREATE THE Q&A CORE LOGIC
+  const answerQuestion = useCallback(async (context: string, userQuestion: string): Promise<string> => {
+    // The system instruction forces the model to act as a Q&A expert 
+    // and only use the provided text (context) for its answer.
+    const systemInstruction = `You are an expert Q&A assistant. Your sole purpose is to answer the user's question ONLY using the text provided below. If the answer is not in the text, state clearly and politely that the information cannot be found in the provided document.
+
+--- PROVIDED DOCUMENT TEXT ---
+${context}
+--- END OF DOCUMENT TEXT ---
+`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash", // Fast and capable model
+        contents: userQuestion,
+        config: {
+          systemInstruction: systemInstruction,
+        },
+      });
+      return response.text;
+    } catch (error) {
+      console.error("Gemini API Error:", error);
+      throw new Error("Failed to get response from AI model.");
+    }
+  }, [ai]);
 
   const processOCR = useCallback(
     async (imageDataUrl: string) => {
@@ -227,6 +263,7 @@ export const OCRUpload = () => {
     setQaHistory([]);
   };
 
+  // 4. IMPLEMENT THE GEMINI API CALL HERE
   const handleAskQuestion = async () => {
     if (!question.trim() || !extractedText) {
       toast({
@@ -239,45 +276,44 @@ export const OCRUpload = () => {
 
     setIsAnswering(true);
 
-    // 🤖 RAG INTEGRATION POINT: Question Answering
-    // This is where you'll integrate RAG (Retrieval Augmented Generation):
-    // 1. Embed the question using an embedding model
-    // 2. Search for relevant chunks from the extracted text (vector search)
-    // 3. Send question + relevant context to LLM
-    // 4. Return the answer
-    //
-    // Example implementation:
-    // const answer = await supabase.functions.invoke('rag-answer', {
-    //   body: { 
-    //     question: question,
-    //     context: extractedText,
-    //     conversationHistory: qaHistory
-    //   }
-    // });
+    // 1. Prepare and add the question to history as a pending item
+    const userQuestion = question.trim();
+    const newQAPair: QAPair = {
+      question: userQuestion,
+      answer: "...", // Placeholder for loading state
+      timestamp: Date.now(),
+    };
+
+    setQaHistory(prev => [...prev, newQAPair]);
+    setQuestion("");
 
     try {
-      // Placeholder response - replace with RAG implementation
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const mockAnswer = `This is a placeholder answer. When RAG is implemented, this will analyze the extracted text and provide an intelligent answer to: "${question}"`;
+      // 2. Call the new RAG-style AI function
+      const aiAnswer = await answerQuestion(extractedText, userQuestion);
 
-      const newQA: QAPair = {
-        question: question,
-        answer: mockAnswer,
-        timestamp: Date.now(),
-      };
-
-      setQaHistory(prev => [...prev, newQA]);
-      setQuestion("");
+      // 3. Update the history with the actual answer
+      setQaHistory(prev => {
+        const updatedHistory = [...prev];
+        // Find the temporary entry by timestamp and update its answer
+        const indexToUpdate = updatedHistory.findIndex(qa => qa.timestamp === newQAPair.timestamp);
+        if (indexToUpdate !== -1) {
+          updatedHistory[indexToUpdate].answer = aiAnswer;
+        }
+        return updatedHistory;
+      });
       
       toast({
-        title: "Answer generated",
-        description: "RAG implementation coming soon!",
+        title: "Answer generated successfully!",
+        description: "The AI has analyzed the extracted text.",
       });
-    } catch (error) {
+
+    } catch (error: any) {
       console.error("Question answering error:", error);
+      // Remove the temporary entry on failure
+      setQaHistory((prev) => prev.filter(q => q.timestamp !== newQAPair.timestamp));
       toast({
         title: "Failed to answer question",
-        description: "An error occurred while processing your question",
+        description: `An error occurred while processing your question: ${error.message}`,
         variant: "destructive",
       });
     } finally {
@@ -439,7 +475,13 @@ export const OCRUpload = () => {
                           </div>
                           <div className="flex-1">
                             <p className="text-sm font-medium text-foreground">{qa.question}</p>
-                            <p className="text-sm text-muted-foreground mt-1">{qa.answer}</p>
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {qa.answer === "..." ? (
+                                <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+                              ) : (
+                                qa.answer
+                              )}
+                            </p>
                           </div>
                         </div>
                         {index < qaHistory.length - 1 && (
@@ -479,7 +521,7 @@ export const OCRUpload = () => {
                 </div>
 
                 <p className="text-xs text-muted-foreground">
-                  💡 RAG integration coming soon - questions will be answered using AI based on the extracted text
+                  ✅ Q&A is now powered by the Gemini API. Questions will be answered based on the extracted text.
                 </p>
               </div>
 
